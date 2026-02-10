@@ -23,3 +23,13 @@ int main() {
 /* With this template, we don't have to write the type explicitly (e.g., add<int>, add<std:string>)
 The compiler can deduce T from arguments.
 */
+
+/* - Additional case -
+
+std::cout << add(3, 2.5); // error
+-> Even though the compiler can deduce types, T must be the same type for all arguments 
+
+e.g.
+std::cout << add<double>(3, 2.5);
+
+*/
