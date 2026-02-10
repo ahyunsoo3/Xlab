@@ -68,7 +68,7 @@ int main() {
 same memory location at the same time, with no synchronization,
 leading to race conditions and undefined behavior. [1]
 
-2) Experiments in LeetCode's Playground show that correct results are common
+2) Experiments without mutex in LeetCode's Playground show that correct results are common
 at low iteration counts, but become increasingly rare as the count grows,
 suggesting nondeterministic behavior due to concurrent execution. */
 
