@@ -22,7 +22,7 @@ static std::size_t parse_size(std::string s) {
     // remove spaces
     s.erase(std::remove_if(s.begin(), s.end(), ::isspace), s.end());
     // uppercase
-    for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    for (char& c : s) c = std::toupper(static_cast<unsigned char>(c));
 
     // split number + unit
     std::size_t i = 0;
