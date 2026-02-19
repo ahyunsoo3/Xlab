@@ -1,0 +1,418 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "22ccaa48",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "papermill": {
+     "duration": 0.003492,
+     "end_time": "2026-02-19T11:12:48.299831",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.296339",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "# Build a call graph with llvmlite (direct calls) + emit Graphviz DOT"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "8f43e3eb",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "execution": {
+     "iopub.execute_input": "2026-02-19T11:12:48.306512Z",
+     "iopub.status.busy": "2026-02-19T11:12:48.306109Z",
+     "iopub.status.idle": "2026-02-19T11:12:48.383025Z",
+     "shell.execute_reply": "2026-02-19T11:12:48.381940Z"
+    },
+    "papermill": {
+     "duration": 0.083368,
+     "end_time": "2026-02-19T11:12:48.385467",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.302099",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "from llvmlite import ir\n",
+    "from collections import defaultdict"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "4764d260",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "execution": {
+     "iopub.execute_input": "2026-02-19T11:12:48.391202Z",
+     "iopub.status.busy": "2026-02-19T11:12:48.390824Z",
+     "iopub.status.idle": "2026-02-19T11:12:48.401972Z",
+     "shell.execute_reply": "2026-02-19T11:12:48.400888Z"
+    },
+    "papermill": {
+     "duration": 0.016494,
+     "end_time": "2026-02-19T11:12:48.404081",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.387587",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "=== LLVM IR ===\n",
+      "; ModuleID = \"cg_demo\"\n",
+      "target triple = \"unknown-unknown-unknown\"\n",
+      "target datalayout = \"\"\n",
+      "\n",
+      "define i32 @\"leaf\"(i32 %\".1\")\n",
+      "{\n",
+      "entry:\n",
+      "  %\".3\" = add i32 %\".1\", 1\n",
+      "  ret i32 %\".3\"\n",
+      "}\n",
+      "\n",
+      "define i32 @\"helper\"(i32 %\".1\")\n",
+      "{\n",
+      "entry:\n",
+      "  %\"y\" = call i32 @\"leaf\"(i32 %\".1\")\n",
+      "  %\".3\" = mul i32 %\"y\", 2\n",
+      "  ret i32 %\".3\"\n",
+      "}\n",
+      "\n",
+      "define i32 @\"util\"(i32 %\".1\")\n",
+      "{\n",
+      "entry:\n",
+      "  %\"a\" = call i32 @\"leaf\"(i32 %\".1\")\n",
+      "  %\"c\" = call i32 @\"helper\"(i32 %\".1\")\n",
+      "  %\".3\" = add i32 %\"a\", %\"c\"\n",
+      "  ret i32 %\".3\"\n",
+      "}\n",
+      "\n",
+      "define i32 @\"main\"()\n",
+      "{\n",
+      "entry:\n",
+      "  %\".2\" = call i32 @\"util\"(i32 10)\n",
+      "  ret i32 %\".2\"\n",
+      "}\n",
+      "\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Build an example module\n",
+    "m = ir.Module(name=\"cg_demo\")\n",
+    "i32 = ir.IntType(32)\n",
+    "\n",
+    "# int leaf(int x) { return x+1; }\n",
+    "leaf = ir.Function(m, ir.FunctionType(i32, [i32]), name=\"leaf\")\n",
+    "x = leaf.args[0]\n",
+    "b = ir.IRBuilder(leaf.append_basic_block(\"entry\"))\n",
+    "b.ret(b.add(x, ir.Constant(i32, 1)))\n",
+    "\n",
+    "# int helper(int x) { return leaf(x)*2; }\n",
+    "helper = ir.Function(m, ir.FunctionType(i32, [i32]), name=\"helper\")\n",
+    "x = helper.args[0]\n",
+    "b = ir.IRBuilder(helper.append_basic_block(\"entry\"))\n",
+    "y = b.call(leaf, [x], name=\"y\")\n",
+    "b.ret(b.mul(y, ir.Constant(i32, 2)))\n",
+    "\n",
+    "# int util(int x) { return leaf(x) + helper(x); }\n",
+    "util = ir.Function(m, ir.FunctionType(i32, [i32]), name=\"util\")\n",
+    "x = util.args[0]\n",
+    "b = ir.IRBuilder(util.append_basic_block(\"entry\"))\n",
+    "a = b.call(leaf, [x], name=\"a\")\n",
+    "c = b.call(helper, [x], name=\"c\")\n",
+    "b.ret(b.add(a, c))\n",
+    "\n",
+    "# int main() { return util(10); }\n",
+    "main = ir.Function(m, ir.FunctionType(i32, []), name=\"main\")\n",
+    "b = ir.IRBuilder(main.append_basic_block(\"entry\"))\n",
+    "b.ret(b.call(util, [ir.Constant(i32, 10)]))\n",
+    "\n",
+    "print(\"=== LLVM IR ===\")\n",
+    "print(m)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "ab8cbf9f",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "execution": {
+     "iopub.execute_input": "2026-02-19T11:12:48.409864Z",
+     "iopub.status.busy": "2026-02-19T11:12:48.409573Z",
+     "iopub.status.idle": "2026-02-19T11:12:48.417871Z",
+     "shell.execute_reply": "2026-02-19T11:12:48.416769Z"
+    },
+    "papermill": {
+     "duration": 0.013662,
+     "end_time": "2026-02-19T11:12:48.419968",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.406306",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "=== Call graph (adjacency) ===\n",
+      "leaf -> []\n",
+      "helper -> ['leaf']\n",
+      "util -> ['helper', 'leaf']\n",
+      "main -> ['util']\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Extract call graph\n",
+    "\n",
+    "def build_call_graph(module: ir.Module):\n",
+    "    \"\"\"\n",
+    "    Returns adjacency dict: caller -> set(callees)\n",
+    "    Works for direct calls. For indirect calls, callee will be \"<indirect>\".\n",
+    "    \"\"\"\n",
+    "    cg = defaultdict(set)\n",
+    "\n",
+    "    for fn in module.functions:\n",
+    "        if fn.is_declaration:\n",
+    "            continue  # skip externs\n",
+    "        caller = fn.name\n",
+    "\n",
+    "        for block in fn.blocks:\n",
+    "            for instr in block.instructions:\n",
+    "                # In llvmlite, call instructions are ir.instructions.CallInstr\n",
+    "                if instr.opname == \"call\":\n",
+    "                    # Direct call: instr.callee is usually an ir.Function\n",
+    "                    callee = getattr(instr, \"callee\", None)\n",
+    "                    if isinstance(callee, ir.Function):\n",
+    "                        cg[caller].add(callee.name)\n",
+    "                    else:\n",
+    "                        # function pointer / indirect call\n",
+    "                        cg[caller].add(\"<indirect>\")\n",
+    "\n",
+    "        # Ensure node exists even if no outgoing edges\n",
+    "        cg[caller] |= set()\n",
+    "\n",
+    "    return dict(cg)\n",
+    "\n",
+    "cg = build_call_graph(m)\n",
+    "\n",
+    "print(\"\\n=== Call graph (adjacency) ===\")\n",
+    "for caller, callees in cg.items():\n",
+    "    print(f\"{caller} -> {sorted(callees)}\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "6e094b35",
+   "metadata": {
+    "_cell_guid": "b1076dfc-b9ad-4769-8c92-a6c4dae69d19",
+    "_uuid": "8f2839f25d086af736a60e9eeb907d3b93b6e0e5",
+    "execution": {
+     "iopub.execute_input": "2026-02-19T11:12:48.425963Z",
+     "iopub.status.busy": "2026-02-19T11:12:48.425598Z",
+     "iopub.status.idle": "2026-02-19T11:12:48.432822Z",
+     "shell.execute_reply": "2026-02-19T11:12:48.431782Z"
+    },
+    "papermill": {
+     "duration": 0.012714,
+     "end_time": "2026-02-19T11:12:48.434894",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.422180",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "=== Graphviz DOT ===\n",
+      "digraph CallGraph {\n",
+      "  rankdir=LR;\n",
+      "  \"helper\" [shape=box];\n",
+      "  \"leaf\" [shape=box];\n",
+      "  \"main\" [shape=box];\n",
+      "  \"util\" [shape=box];\n",
+      "  \"helper\" -> \"leaf\";\n",
+      "  \"util\" -> \"helper\";\n",
+      "  \"util\" -> \"leaf\";\n",
+      "  \"main\" -> \"util\";\n",
+      "}\n"
+     ]
+    }
+   ],
+   "source": [
+    "# Emit Graphviz DOT\n",
+    "\n",
+    "def callgraph_to_dot(cg: dict) -> str:\n",
+    "    # collect nodes: callers + callees\n",
+    "    nodes = set(cg.keys())\n",
+    "    for callees in cg.values():\n",
+    "        nodes.update(callees)\n",
+    "\n",
+    "    lines = [\"digraph CallGraph {\", \"  rankdir=LR;\"]\n",
+    "    # nodes\n",
+    "    for n in sorted(nodes):\n",
+    "        if n == \"<indirect>\":\n",
+    "            lines.append(f'  \"{n}\" [shape=diamond];')\n",
+    "        else:\n",
+    "            lines.append(f'  \"{n}\" [shape=box];')\n",
+    "\n",
+    "    # edges\n",
+    "    for caller, callees in cg.items():\n",
+    "        for callee in callees:\n",
+    "            lines.append(f'  \"{caller}\" -> \"{callee}\";')\n",
+    "\n",
+    "    lines.append(\"}\")\n",
+    "    return \"\\n\".join(lines)\n",
+    "\n",
+    "dot = callgraph_to_dot(cg)\n",
+    "print(\"\\n=== Graphviz DOT ===\")\n",
+    "print(dot)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "47494c6d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-02-19T11:12:48.442140Z",
+     "iopub.status.busy": "2026-02-19T11:12:48.440796Z",
+     "iopub.status.idle": "2026-02-19T11:12:48.678939Z",
+     "shell.execute_reply": "2026-02-19T11:12:48.677640Z"
+    },
+    "papermill": {
+     "duration": 0.244202,
+     "end_time": "2026-02-19T11:12:48.681384",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.437182",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "dot - graphviz version 2.43.0 (0)\r\n"
+     ]
+    }
+   ],
+   "source": [
+    "!dot -V"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "04e18f47",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2026-02-19T11:12:48.687795Z",
+     "iopub.status.busy": "2026-02-19T11:12:48.687399Z",
+     "iopub.status.idle": "2026-02-19T11:12:48.917719Z",
+     "shell.execute_reply": "2026-02-19T11:12:48.916654Z"
+    },
+    "papermill": {
+     "duration": 0.237085,
+     "end_time": "2026-02-19T11:12:48.920669",
+     "exception": false,
+     "start_time": "2026-02-19T11:12:48.683584",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<PIL.PngImagePlugin.PngImageFile image mode=RGBA size=443x89>"
+      ]
+     },
+     "execution_count": 6,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "import subprocess, textwrap, pathlib\n",
+    "\n",
+    "pathlib.Path(\"callgraph.dot\").write_text(dot)\n",
+    "subprocess.run([\"dot\", \"-Tpng\", \"callgraph.dot\", \"-o\", \"callgraph.png\"], check=True)\n",
+    "\n",
+    "from PIL import Image\n",
+    "Image.open(\"callgraph.png\")\n"
+   ]
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "none",
+   "dataSources": [],
+   "dockerImageVersionId": 31286,
+   "isGpuEnabled": false,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.12.12"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 4.528801,
+   "end_time": "2026-02-19T11:12:49.343843",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2026-02-19T11:12:44.815042",
+   "version": "2.6.0"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
